@@ -16,7 +16,7 @@ from config.settings import Config
 from core.skill.storage_ops import StorageOperations
 from core.skill.meta_client import SkillMetaClient
 from core.skill.registry_client import RegistryClient
-from logger.setup import logger
+from logger.setup import logger, trace_id_var
 
 # logger = logging.getLogger(__name__)
 
@@ -71,6 +71,77 @@ class Manager(StateModule):
         self._state_flag_session = "skillManagerSession"
         
         logger.info(f"✅ Manager initialized with metadata source={source}, client={self.meta_client.__class__.__name__}")
+
+    def _is_registry_client(self) -> bool:
+        return isinstance(self.meta_client, RegistryClient)
+
+    async def _create_registry_binding(
+        self,
+        session_id: str,
+        user_id: str,
+        skill_info: Dict[str, Any],
+        status: str = "pending",
+        sandbox_id: str = "",
+    ) -> Optional[str]:
+        if not self._is_registry_client():
+            return None
+
+        skill_version_id = skill_info.get("skill_version_id")
+        if not skill_version_id:
+            return None
+
+        mounted_path = f"/workspace/skill/{skill_info.get('skill_storage_id', '')}".rstrip("/")
+        binding = await self.meta_client.create_session_binding(
+            session_id=session_id,
+            user_id=user_id,
+            skill_version_id=skill_version_id,
+            mounted_path=mounted_path,
+            status=status,
+            sandbox_id=sandbox_id,
+        )
+        if not binding:
+            return None
+        return binding.get("id")
+
+    async def _update_registry_binding_status(
+        self,
+        binding_id: str,
+        status: str,
+        sandbox_id: str = "",
+        mounted_path: Optional[str] = None,
+    ) -> None:
+        if not self._is_registry_client() or not binding_id:
+            return
+
+        await self.meta_client.update_session_binding(
+            binding_id=binding_id,
+            status=status,
+            sandbox_id=sandbox_id,
+            mounted_path=mounted_path,
+        )
+
+    async def _write_registry_audit(
+        self,
+        actor_id: str,
+        action: str,
+        target_type: str,
+        target_id: str,
+        result: str,
+        detail: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not self._is_registry_client():
+            return
+
+        trace_id = trace_id_var.get() or f"trace-{int(time.time() * 1000)}"
+        await self.meta_client.create_audit_log(
+            trace_id=trace_id,
+            actor_id=actor_id,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            result=result,
+            detail=detail or {},
+        )
     
     async def __aenter__(self):
         """异步上下文管理器入口"""
@@ -196,6 +267,7 @@ class Manager(StateModule):
             attached_skills = []
             failed_skills = []
             current_time = int(time.time())
+            current_session_skills = self.session_skills[session_id][user_id]["skills"]
             
             for skill_name in skill_names:
                 # 获取技能信息（通过接口）
@@ -209,11 +281,31 @@ class Manager(StateModule):
                     skill_info_with_owner = skill_info.copy()
                     
                     # 装配技能到会话（避免重复）
-                    existing_names = [s["skill_name"] for s in self.session_skills[session_id][user_id]["skills"]]
+                    existing_names = [s["skill_name"] for s in current_session_skills]
                     if skill_name not in existing_names:
-                        self.session_skills[session_id][user_id]["skills"].append(skill_info_with_owner)
+                        binding_id = await self._create_registry_binding(
+                            session_id=session_id,
+                            user_id=user_id,
+                            skill_info=skill_info_with_owner,
+                            status="pending",
+                        )
+                        if binding_id:
+                            skill_info_with_owner["registry_binding_id"] = binding_id
+
+                        current_session_skills.append(skill_info_with_owner)
                         attached_skills.append(skill_name)
                         logger.info(f"Attached skill {skill_name} (owner: {skill_owner_id}) to session {session_id}/{user_id}")
+                    elif self._is_registry_client():
+                        existing_skill = next((s for s in current_session_skills if s["skill_name"] == skill_name), None)
+                        if existing_skill and not existing_skill.get("registry_binding_id"):
+                            binding_id = await self._create_registry_binding(
+                                session_id=session_id,
+                                user_id=user_id,
+                                skill_info=existing_skill,
+                                status="pending",
+                            )
+                            if binding_id:
+                                existing_skill["registry_binding_id"] = binding_id
             
             # 更新修改时间
             self.session_skills[session_id][user_id]["updated_at"] = current_time
@@ -227,10 +319,31 @@ class Manager(StateModule):
             }
             
             logger.info(f"Attached skills to session {session_id}/{user_id}: {result}")
+
+            await self._write_registry_audit(
+                actor_id=user_id,
+                action="session.skill.attach",
+                target_type="session",
+                target_id=session_id,
+                result="success" if not failed_skills else "fail",
+                detail={
+                    "owner_id": skill_owner_id,
+                    "attached": attached_skills,
+                    "failed": failed_skills,
+                },
+            )
             return result
             
         except Exception as e:
             logger.error(f"Failed to attach skills to session {session_id}/{user_id}: {str(e)}")
+            await self._write_registry_audit(
+                actor_id=user_id,
+                action="session.skill.attach",
+                target_type="session",
+                target_id=session_id,
+                result="fail",
+                detail={"error": str(e), "requested_skills": skill_names, "owner_id": skill_owner_id},
+            )
             return {"attached": [], "failed": skill_names}
     
     async def detach_skills(self, session_id: str, user_id: str, skill_names: Optional[List[str]] = None) -> bool:
@@ -252,12 +365,14 @@ class Manager(StateModule):
             
             if skill_names is None:
                 # 卸载所有技能
+                removed_skills = list(self.session_skills[session_id][user_id]["skills"])
                 self.session_skills[session_id][user_id]["skills"] = []
                 self.session_skills[session_id][user_id]["to_do"] = []
                 logger.info(f"Detached all skills from session {session_id}/{user_id}")
             else:
                 # 卸载指定技能
                 current_skills = self.session_skills[session_id][user_id]["skills"]
+                removed_skills = [skill for skill in current_skills if skill["skill_name"] in skill_names]
                 self.session_skills[session_id][user_id]["skills"] = [
                     skill for skill in current_skills if skill["skill_name"] not in skill_names
                 ]
@@ -271,14 +386,43 @@ class Manager(StateModule):
             
             # 更新修改时间
             self.session_skills[session_id][user_id]["updated_at"] = int(time.time())
+
+            for removed_skill in removed_skills:
+                mounted_path = f"/workspace/skill/{removed_skill.get('skill_storage_id', '')}".rstrip("/")
+                await self._update_registry_binding_status(
+                    binding_id=removed_skill.get("registry_binding_id", ""),
+                    status="unmounted",
+                    sandbox_id="",
+                    mounted_path=mounted_path,
+                )
             
             # 保存到文件
             await self._save_session_skills()
+
+            await self._write_registry_audit(
+                actor_id=user_id,
+                action="session.skill.detach",
+                target_type="session",
+                target_id=session_id,
+                result="success",
+                detail={
+                    "detached": [skill.get("skill_name") for skill in removed_skills],
+                    "mode": "all" if skill_names is None else "partial",
+                },
+            )
             
             return True
             
         except Exception as e:
             logger.error(f"Failed to detach skills from session {session_id}/{user_id}: {str(e)}")
+            await self._write_registry_audit(
+                actor_id=user_id,
+                action="session.skill.detach",
+                target_type="session",
+                target_id=session_id,
+                result="fail",
+                detail={"error": str(e), "requested_skills": skill_names or []},
+            )
             return False
     
     # ==================== 技能查询 ====================

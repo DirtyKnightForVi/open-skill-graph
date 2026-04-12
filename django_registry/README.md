@@ -27,6 +27,18 @@ uv run python django_registry/manage.py runserver 0.0.0.0:8001
 uv add <package-name>
 ```
 
+5. Seed common skills from local skill storage.
+
+```bash
+uv run python django_registry/manage.py seed_skills --owner-id common
+```
+
+Import all owners when needed:
+
+```bash
+uv run python django_registry/manage.py seed_skills --all-owners
+```
+
 ## Main API
 
 - `GET /api/v1/skills/resolve?owner_id=<id>&skill_name=<name>`

@@ -11,6 +11,7 @@ from agentscope.tool import Toolkit
 from agentscope_runtime.adapters.agentscope.tool import sandbox_tool_adapter
 
 from core.sandbox.utils import SkillFileSystemUtils
+from core.skill.registry_client import RegistryClient
 from src.core.skill.toolkit import SandboxToolkit, ToolkitBuilder
 from core.agent.builder import AgentBuilder
 from core.prompt import PromptBuilder
@@ -192,28 +193,62 @@ def copy_local_skill_to_sandbox(sandbox_instance, skills, toolkit=None, is_skill
 
 async def sandbox_load_local_skill(sandbox_instance, skills, is_skill_creator_mode, to_do_list, redis_client):
     """沙箱内加载本地技能包"""
+    async def sync_binding_status(target_skills: List[Dict[str, Any]], status: str):
+        source = str(Config.SKILL_METADATA_SOURCE).lower().strip()
+        if source not in {"registry", "auto"} or not Config.REGISTRY_BASE_URL:
+            return
+
+        bindings = [skill for skill in target_skills if skill.get("registry_binding_id")]
+        if not bindings:
+            return
+
+        async with RegistryClient(base_url=Config.REGISTRY_BASE_URL, timeout=Config.REGISTRY_TIMEOUT) as client:
+            tasks = []
+            for skill in bindings:
+                storage_id = skill.get("skill_storage_id", "")
+                mounted_path = f"/workspace/skill/{storage_id}".rstrip("/")
+                tasks.append(
+                    client.update_session_binding(
+                        binding_id=skill.get("registry_binding_id"),
+                        status=status,
+                        sandbox_id=sandbox_instance.sandbox_id,
+                        mounted_path=mounted_path,
+                    )
+                )
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        failed = [item for item in results if item is not True]
+        if failed:
+            logger.warning(f"Registry binding status sync incomplete: status={status}, failed_count={len(failed)}")
+
     logger.info(f"开始从本地技能仓库加载技能到沙箱，沙箱ID: {sandbox_instance.sandbox_id}")
     logger.info(f"技能数量: {len(skills)}，技能名称列表: {[skill.get('skill_name') for skill in skills]}")
     logger.info(f"技能创建模式: {is_skill_creator_mode}")
 
     storage_keys = [skill['skill_storage_id'] for skill in skills if skill.get('skill_storage_id')]
-    if storage_keys:
-        logger.info(f"开始从本地技能仓库复制技能，storage_keys: {storage_keys}")
-        SkillFileSystemUtils().sandbox_download_skill_packages(sandbox_instance, storage_keys)
+    loaded_skills = [skill for skill in skills if skill.get('skill_storage_id')]
+    try:
+        if storage_keys:
+            logger.info(f"开始从本地技能仓库复制技能，storage_keys: {storage_keys}")
+            SkillFileSystemUtils().sandbox_download_skill_packages(sandbox_instance, storage_keys)
 
-        await redis_client.set(
-            f"{sandbox_instance.sandbox_id}_download_skills",
-            json.dumps(skills),
-            ex=12*3600
-        )
-        logger.debug(f"技能信息已存储到Redis")
+            await redis_client.set(
+                f"{sandbox_instance.sandbox_id}_download_skills",
+                json.dumps(skills),
+                ex=12*3600
+            )
+            logger.debug(f"技能信息已存储到Redis")
+            await sync_binding_status(loaded_skills, "mounted")
 
-    if is_skill_creator_mode and to_do_list:
-        logger.info(f"技能创建模式，额外加载待完善技能: {to_do_list[0]['skill_storage_id']}")
-        SkillFileSystemUtils().sandbox_download_skill_packages(
-            sandbox_instance,
-            [to_do_list[0]["skill_storage_id"]]
-        )
+        if is_skill_creator_mode and to_do_list:
+            logger.info(f"技能创建模式，额外加载待完善技能: {to_do_list[0]['skill_storage_id']}")
+            SkillFileSystemUtils().sandbox_download_skill_packages(
+                sandbox_instance,
+                [to_do_list[0]["skill_storage_id"]]
+            )
+    except Exception:
+        await sync_binding_status(loaded_skills, "failed")
+        raise
 
 
 async def register_skills(

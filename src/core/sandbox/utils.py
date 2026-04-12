@@ -40,9 +40,6 @@ class RunShellCommandResponse(CallToolResult):
 
 
 class FileSystemUtils:
-    def __init__(self):
-        self.sandbox_script_dir = '/scripts'
-
     def sync_workspace_from_remote(self, user_id, sandbox: FilesystemSandbox = None, *args, **kwargs):
         """从远端同步工作空间"""
         raise NotImplementedError()
@@ -83,16 +80,43 @@ class FileSystemUtils:
         """
         save_dir = save_dir or WORKDIR_DIR
         exclude_dirs = exclude_dirs or []
-        cmd = (f'python {self.sandbox_script_dir}/file.py make_archive --archive_name {save_name} '
-               f'--archive_dir {archive_dir} --save_dir {save_dir}')
-        if exclude_dirs:
-            exclude_dirs_str = ','.join(exclude_dirs)
-            cmd += f' --exclude="{exclude_dirs_str}"'
 
+        py_code = (
+            "import json, os, zipfile\n"
+            f"archive_name = {json.dumps(str(save_name))}\n"
+            f"archive_dir = {json.dumps(str(archive_dir))}\n"
+            f"save_dir = {json.dumps(str(save_dir))}\n"
+            f"exclude_dirs = set({json.dumps([str(item) for item in exclude_dirs])})\n"
+            "archive_path = os.path.join(save_dir, f'{archive_name}.zip')\n"
+            "os.makedirs(save_dir, exist_ok=True)\n"
+            "base_dir = os.path.abspath(archive_dir)\n"
+            "with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as zf:\n"
+            "    for root, dirs, files in os.walk(base_dir):\n"
+            "        dirs[:] = [d for d in dirs if d not in exclude_dirs]\n"
+            "        for fn in files:\n"
+            "            file_path = os.path.join(root, fn)\n"
+            "            if os.path.abspath(file_path) == os.path.abspath(archive_path):\n"
+            "                continue\n"
+            "            rel_path = os.path.relpath(file_path, base_dir)\n"
+            "            if any(rel_path == ex or rel_path.startswith(ex + os.sep) for ex in exclude_dirs):\n"
+            "                continue\n"
+            "            zf.write(file_path, rel_path)\n"
+            "print(json.dumps({'status': 'success', 'data': {'archive_path': archive_path}}))\n"
+        )
+        cmd = f"python -c {json.dumps(py_code)}"
         self.run_shell_command_in_sandbox(sandbox, cmd)
 
     def sandbox_unpack_archive(self, sandbox: FilesystemSandbox, archive_path, save_dir):
-        cmd = f'python {self.sandbox_script_dir}/file.py unpack_archive --archive_path {archive_path} --save_dir {save_dir}'
+        py_code = (
+            "import json, os, zipfile\n"
+            f"archive_path = {json.dumps(str(archive_path))}\n"
+            f"save_dir = {json.dumps(str(save_dir))}\n"
+            "os.makedirs(save_dir, exist_ok=True)\n"
+            "with zipfile.ZipFile(archive_path, 'r') as zf:\n"
+            "    zf.extractall(save_dir)\n"
+            "print(json.dumps({'status': 'success', 'data': {'save_dir': save_dir}}))\n"
+        )
+        cmd = f"python -c {json.dumps(py_code)}"
         return self.run_shell_command_in_sandbox(sandbox, cmd)
 
     @staticmethod
@@ -171,10 +195,12 @@ class SkillFileSystemUtils(FileSystemUtils):
                 sandbox_path,
                 str(archive_path)
             )
-            self.run_shell_command_in_sandbox(
+            self.sandbox_unpack_archive(
                 sandbox_instance,
-                f"mkdir -p /workspace/skill/{storage_key} && unzip -o {sandbox_path} -d /workspace/skill/{storage_key} && rm -rf {sandbox_path}"
+                sandbox_path,
+                save_dir=f"/workspace/skill/{storage_key}"
             )
+            sandbox_instance.manager_api.fs_remove(sandbox_instance.sandbox_id, sandbox_path)
 
     def sandbox_upload_skill_package(self, sandbox_instance, storage_key: str, sandbox_file_path: str):
         """将沙箱内技能包保存到本地技能仓库"""

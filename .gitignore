@@ -12,3 +12,4 @@ docker
 
 # Virtual environments
 .venv
+uv.lock

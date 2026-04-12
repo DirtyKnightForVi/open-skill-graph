@@ -17,3 +17,8 @@ uv.lock
 
 # Local environment secrets
 .env
+
+# Django registry local artifacts
+django_registry/db.sqlite3
+django_registry/__pycache__/
+django_registry/**/__pycache__/

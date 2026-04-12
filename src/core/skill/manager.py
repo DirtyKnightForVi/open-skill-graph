@@ -15,6 +15,7 @@ from agentscope.module import StateModule
 from config.settings import Config
 from core.skill.storage_ops import StorageOperations
 from core.skill.meta_client import SkillMetaClient
+from core.skill.registry_client import RegistryClient
 from logger.setup import logger
 
 # logger = logging.getLogger(__name__)
@@ -48,13 +49,28 @@ class Manager(StateModule):
         self.session_skills: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self.register_state('session_skills')
         
-        # 元信息客户端（通过接口获取技能信息）
-        self.meta_client = SkillMetaClient()
+        # 元信息客户端（可切换: meta / registry / auto）
+        source = str(Config.SKILL_METADATA_SOURCE).lower().strip()
+        if source == "registry":
+            self.meta_client = RegistryClient(
+                base_url=Config.REGISTRY_BASE_URL,
+                timeout=Config.REGISTRY_TIMEOUT,
+            )
+        elif source == "auto":
+            if Config.REGISTRY_BASE_URL:
+                self.meta_client = RegistryClient(
+                    base_url=Config.REGISTRY_BASE_URL,
+                    timeout=Config.REGISTRY_TIMEOUT,
+                )
+            else:
+                self.meta_client = SkillMetaClient()
+        else:
+            self.meta_client = SkillMetaClient()
         
         self._state_flag = "skillManager"
         self._state_flag_session = "skillManagerSession"
         
-        logger.info("✅ Manager initialized with meta client (without local cache)")
+        logger.info(f"✅ Manager initialized with metadata source={source}, client={self.meta_client.__class__.__name__}")
     
     async def __aenter__(self):
         """异步上下文管理器入口"""

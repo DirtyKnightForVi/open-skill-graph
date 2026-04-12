@@ -107,6 +107,12 @@ class Config:
     DOWNLOAD_SKILL_PATH = os.environ.get("DOWNLOAD_SKILL_PATH", "downloads/skills")
 
     # 技能元数据接口配置
+    SKILL_METADATA_SOURCE = os.environ.get("SKILL_METADATA_SOURCE", "meta")
+    REGISTRY_BASE_URL = os.environ.get("REGISTRY_BASE_URL", "")
+    REGISTRY_TIMEOUT = int(os.environ.get("REGISTRY_TIMEOUT", "10"))
+    REGISTRY_TOKEN = os.environ.get("REGISTRY_TOKEN", "")
+
+    # 旧元数据接口配置（兼容保留）
     SKILL_META_API_URL = os.environ.get("SKILL_META_API_URL", "")
     SKILL_META_API_TIMEOUT = int(os.environ.get("SKILL_META_API_TIMEOUT", "10"))
     SKILL_META_API_MAX_RETRIES = int(os.environ.get("SKILL_META_API_MAX_RETRIES", "2"))

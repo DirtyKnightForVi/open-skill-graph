@@ -50,7 +50,6 @@ RUN uv pip install setuptools wheel && uv pip install agentscope-runtime --upgra
 
 # 新增一些依赖
 RUN uv pip install --system \
-    # 1. 办公与文档处理（核心强化区）
     pypdf pypdf2 pdf2image pdfplumber python-docx python-pptx \
     openpyxl xlrd \
     PyMuPDF \
@@ -65,9 +64,7 @@ RUN uv pip install --system \
     plotly dash \
     jupyter ipython dask numba sympy \
     bokeh holoviews panel \
-    # 3. 金融与统计分析
-    yfinance akshare statsmodels ta-lib quantlib-python \
-
+    yfinance akshare statsmodels ta-lib quantlib-python
 # 重命名rm命令，使其不可用
 RUN mv /bin/rm /bin/rm.disabled
 

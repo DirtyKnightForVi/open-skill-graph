@@ -186,13 +186,13 @@ class SkillFileSystemUtils(FileSystemUtils):
             return
 
         sandbox_save_path = os.path.join(WORKDIR_DIR, workspace_archive)
-        sandbox_instance.manager_api.fs_write_from_path(
-            sandbox_instance.sandbox_id,
+        sandbox.manager_api.fs_write_from_path(
+            sandbox.sandbox_id,
             sandbox_save_path,
             str(local_workspace_path)
         )
         self.sandbox_unpack_archive(sandbox, sandbox_save_path, save_dir=WORKDIR_DIR)
-        sandbox_instance.manager_api.fs_remove(sandbox_instance.sandbox_id, sandbox_save_path)
+        sandbox.manager_api.fs_remove(sandbox.sandbox_id, sandbox_save_path)
 
     def sync_workspace_to_remote(self, user_id, sandbox: FilesystemSandbox = None, *args, **kwargs):
         """将沙箱工作空间备份到本地存储"""

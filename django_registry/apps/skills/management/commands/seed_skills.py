@@ -54,13 +54,19 @@ class Command(BaseCommand):
         dry_run = bool(options["dry_run"])
 
         archives = sorted(storage_root.glob("SKILL_*.zip"))
-        if not archives:
+        skill_dirs = sorted(
+            [item for item in storage_root.iterdir() if item.is_dir() and (item / "SKILL.md").exists()],
+            key=lambda item: item.name,
+        )
+
+        if not archives and not skill_dirs:
             self.stdout.write(self.style.WARNING(f"No skill package found under {storage_root}"))
             return
 
         scanned = 0
         imported = 0
         skipped = 0
+        imported_keys = set()
 
         for archive_path in archives:
             scanned += 1
@@ -77,6 +83,11 @@ class Command(BaseCommand):
 
             metadata = self._read_skill_metadata(archive_path)
             skill_name = metadata["name"] or default_skill_name
+            skill_key = (owner, skill_name)
+            if skill_key in imported_keys:
+                skipped += 1
+                continue
+
             skill_desc = metadata["description"]
             artifact_sha256 = self._sha256_of_file(archive_path)
             artifact_uri = str(archive_path.resolve())
@@ -121,7 +132,74 @@ class Command(BaseCommand):
                 SkillVersion.objects.filter(skill=skill).exclude(pk=skill_version.pk).update(is_active=False)
 
             imported += 1
+            imported_keys.add(skill_key)
             self.stdout.write(self.style.SUCCESS(f"Imported {owner}/{skill_name}:{version}"))
+
+        for skill_dir in skill_dirs:
+            scanned += 1
+            skill_name = skill_dir.name.strip()
+            if not skill_name:
+                skipped += 1
+                continue
+
+            owner = owner_id
+            if not all_owners and owner != owner_id:
+                skipped += 1
+                continue
+
+            skill_key = (owner, skill_name)
+            if skill_key in imported_keys:
+                skipped += 1
+                continue
+
+            metadata = self._read_skill_metadata_from_file(skill_dir / "SKILL.md")
+            skill_desc = metadata["description"]
+            artifact_sha256 = self._sha256_of_directory(skill_dir)
+            artifact_uri = str(skill_dir.resolve())
+
+            visibility = SkillVisibility.COMMON if owner == "common" else SkillVisibility.PRIVATE
+            status = SkillStatus.PUBLISHED if owner == "common" else SkillStatus.DRAFT
+
+            if dry_run:
+                imported += 1
+                imported_keys.add(skill_key)
+                self.stdout.write(
+                    f"[dry-run] {owner}/{skill_name} (dir) -> version={version}, sha256={artifact_sha256[:12]}..."
+                )
+                continue
+
+            with transaction.atomic():
+                skill, _ = Skill.objects.update_or_create(
+                    owner_id=owner,
+                    name=skill_name,
+                    defaults={
+                        "display_name": skill_name,
+                        "description": skill_desc,
+                        "visibility": visibility,
+                        "status": status,
+                    },
+                )
+
+                skill_version, _ = SkillVersion.objects.update_or_create(
+                    skill=skill,
+                    version=version,
+                    defaults={
+                        "description": f"Imported from directory {skill_dir.name}",
+                        "artifact_uri": artifact_uri,
+                        "artifact_sha256": artifact_sha256,
+                        "metadata": {
+                            "source": "local-directory",
+                            "skill_dir": skill_dir.name,
+                        },
+                        "is_active": True,
+                    },
+                )
+
+                SkillVersion.objects.filter(skill=skill).exclude(pk=skill_version.pk).update(is_active=False)
+
+            imported += 1
+            imported_keys.add(skill_key)
+            self.stdout.write(self.style.SUCCESS(f"Imported {owner}/{skill_name}:{version} (dir)"))
 
         self.stdout.write(
             self.style.SUCCESS(
@@ -155,6 +233,17 @@ class Command(BaseCommand):
         return digest.hexdigest()
 
     @staticmethod
+    def _sha256_of_directory(directory: Path) -> str:
+        digest = hashlib.sha256()
+        for path in sorted([item for item in directory.rglob("*") if item.is_file()]):
+            rel = path.relative_to(directory).as_posix()
+            digest.update(rel.encode("utf-8", errors="ignore"))
+            with path.open("rb") as fp:
+                for chunk in iter(lambda: fp.read(8192), b""):
+                    digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
     def _read_skill_metadata(archive_path: Path):
         content = ""
         with zipfile.ZipFile(archive_path, "r") as zip_file:
@@ -164,6 +253,19 @@ class Command(BaseCommand):
                 candidate = next((name for name in names if name.endswith("/SKILL.md")), "")
             if candidate:
                 content = zip_file.read(candidate).decode("utf-8", errors="ignore")
+
+        return Command._parse_skill_markdown(content)
+
+    @staticmethod
+    def _read_skill_metadata_from_file(skill_md_path: Path):
+        if not skill_md_path.exists():
+            return {"name": "", "description": ""}
+
+        content = skill_md_path.read_text(encoding="utf-8", errors="ignore")
+        return Command._parse_skill_markdown(content)
+
+    @staticmethod
+    def _parse_skill_markdown(content: str):
 
         if not content:
             return {"name": "", "description": ""}

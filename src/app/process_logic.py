@@ -59,22 +59,38 @@ def setup_environment(
     Returns:
         Tuple: (沙箱实例或None, 环境信息字典)
     """
-    # 使用沙箱
-    try:
-        sandboxes = app_state.sandbox_service.connect(
-            session_id=session_id,
-            user_id=user_id,
-            sandbox_types=[Config.SANDBOX_TYPE],
-            # sandbox_types=["my_custom_sandbox"],
-        )
-        target_box = sandboxes[0]
-        # url = target_box.desktop_url  # Web 桌面访问地址
-        # logger.info(f"Connected to sandbox for session {session_id}/{user_id}, desktop url is : {url}. ")
-        logger.info(f"Connected to sandbox for session {session_id}/{user_id}. ")
-        return target_box, {"type": "sandbox", "sandbox": target_box}
-    except Exception as e:
-        logger.error(f"Failed to connect to sandbox: {str(e)}")
-        raise
+    # 使用沙箱，若自定义类型失败则回退 base
+    sandbox_types = [Config.SANDBOX_TYPE]
+    if Config.SANDBOX_TYPE != "base":
+        sandbox_types.append("base")
+
+    last_error = None
+    for sandbox_type in sandbox_types:
+        try:
+            sandboxes = app_state.sandbox_service.connect(
+                session_id=session_id,
+                user_id=user_id,
+                sandbox_types=[sandbox_type],
+            )
+            target_box = sandboxes[0] if sandboxes else None
+            sandbox_id = getattr(target_box, "sandbox_id", None)
+            if not target_box or not sandbox_id:
+                raise RuntimeError(
+                    f"Sandbox created with invalid identity (sandbox_type={sandbox_type}, sandbox_id={sandbox_id})."
+                )
+
+            logger.info(
+                f"Connected to sandbox for session {session_id}/{user_id} with type={sandbox_type}, sandbox_id={sandbox_id}."
+            )
+            return target_box, {"type": "sandbox", "sandbox": target_box, "sandbox_type": sandbox_type}
+        except Exception as e:
+            last_error = e
+            logger.warning(f"Failed to connect sandbox type={sandbox_type}: {e}")
+
+    raise RuntimeError(
+        f"Failed to initialize sandbox for session {session_id}/{user_id}. "
+        f"Please ensure the sandbox image exists and can be pulled. Last error: {last_error}"
+    )
 
 
 def build_system_prompt(

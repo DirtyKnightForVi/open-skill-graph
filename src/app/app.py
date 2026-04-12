@@ -213,10 +213,15 @@ class ProcessContext:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         # 技能创建模式结束时保存沙箱技能到本地存储
-        if self.is_skill_creator_mode and len(self.skill_to_upload_storage_list) > 0:
+        if self.is_skill_creator_mode and len(self.skill_to_upload_storage_list) > 0 and self.sandbox_id:
             self.sync_sandbox_skill_file_to_storage(self.skill_to_upload_storage_list)
+        elif self.is_skill_creator_mode and len(self.skill_to_upload_storage_list) > 0:
+            logger.warning(f"Skip syncing created skills because sandbox is invalid: user_id={self.user_id}, session_id={self.session_id}")
 
-        self.sandbox_utils.sync_workspace_to_remote(self.user_id, self.sandbox_instance, session_id=self.session_id)
+        if self.sandbox_id:
+            self.sandbox_utils.sync_workspace_to_remote(self.user_id, self.sandbox_instance, session_id=self.session_id)
+        else:
+            logger.warning(f"Skip workspace backup because sandbox is invalid: user_id={self.user_id}, session_id={self.session_id}")
 
     @property
     def sandbox_id(self):

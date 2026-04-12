@@ -103,7 +103,15 @@ class ToolkitBuilder:
         
         # 注册沙箱中的工具
         tools = target_sandbox.list_tools()
+        if not isinstance(tools, dict):
+            raise RuntimeError(
+                f"Invalid list_tools response type: {type(tools).__name__}, value={tools}"
+            )
         for name in tools:
+            if not isinstance(tools[name], (list, tuple)):
+                raise RuntimeError(
+                    f"Invalid tools payload for namespace '{name}': {tools[name]}"
+                )
             for tool_name in tools[name]:
                 toolkit.register_tool_function(sandbox_tool_adapter(getattr(target_sandbox, tool_name)))
         

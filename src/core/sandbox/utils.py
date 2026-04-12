@@ -104,11 +104,17 @@ class FileSystemUtils:
                 cmd (str): 需要执行的脚本
                 resp_parse_func (callable): 自定义结果解析函数 def resp_parse_func(cmd_output)
         """
+        sandbox_id = getattr(sandbox_instance, 'sandbox_id', None)
+        if not sandbox_id:
+            raise SandBoxRunCommendError('沙箱未就绪: sandbox_id 为空，无法执行命令')
+
         raw_resp = sandbox_instance.run_shell_command(cmd)
 
         # 自定义返回解析
         if callable(resp_parse_func):
             return resp_parse_func(raw_resp)
+        if not isinstance(raw_resp, dict):
+            raise SandBoxRunCommendError(f'沙箱执行命令返回异常格式: type={type(raw_resp).__name__}, value={raw_resp}')
         resp = RunShellCommandResponse(**raw_resp)
         if resp.isError:
             raise SandBoxRunCommendError(f'沙箱执行命令失败: {resp.stderr}')
@@ -124,7 +130,13 @@ class FileSystemUtils:
                 resp_parse_func (callable): 自定义结果解析函数 def resp_parse_func(cmd_output)
         """
         resp = cls._run_shell_command_in_sandbox(sandbox_instance, cmd, resp_parse_func)
-        output = json.loads(resp.stdout)
+        try:
+            output = json.loads(resp.stdout)
+        except Exception as e:
+            raise SandBoxRunCommendError(f'沙箱执行脚本返回非JSON: cmd={cmd}, stdout={resp.stdout}, error={e}')
+
+        if not isinstance(output, dict):
+            raise SandBoxRunCommendError(f'沙箱执行脚本返回数据结构异常: cmd={cmd}, output={output}')
         if output['status'] != 'success':
             raise SandBoxRunCommendError(f'沙箱执行脚本异常: cmd={cmd}, output={resp.stdout}')
         return output.get('data', {})
@@ -196,7 +208,7 @@ class SkillFileSystemUtils(FileSystemUtils):
 
     def sync_workspace_to_remote(self, user_id, sandbox: FilesystemSandbox = None, *args, **kwargs):
         """将沙箱工作空间备份到本地存储"""
-        if sandbox is None:
+        if sandbox is None or not getattr(sandbox, 'sandbox_id', None):
             return
 
         session_id = kwargs.get('session_id')

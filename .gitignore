@@ -9,6 +9,7 @@ Agent_Work_Dir
 docs
 Experiments
 docker
+test
 
 # Virtual environments
 .venv

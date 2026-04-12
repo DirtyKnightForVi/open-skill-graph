@@ -34,6 +34,8 @@ def docker_in_docker_wrapper(func):
         _id, ports, ip = func(
             *args, **kwargs,
         )
+        if not _id:
+            raise RuntimeError("Sandbox container creation failed: container id is empty. Check image availability and registry access.")
         real_ip = os.getenv("SANDBOX_IP", "localhost")
         app.logger.info(f'容器启动成功: 容器id={_id}, 端口={ports}, ip={ip}, 实际调用ip={real_ip}')
         return _id, ports, real_ip

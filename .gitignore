@@ -10,6 +10,8 @@ docs
 Experiments
 docker
 test
+sessions_mount_dir
+logs
 
 # Virtual environments
 .venv

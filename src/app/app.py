@@ -166,15 +166,13 @@ async def lifespan(app: FastAPI):
     finally:
         await app.state.sandbox_service.stop()
 
-class CustomAgentRequest(AgentRequest):
-    query_type: Optional[str] = None
 
 # 修改 AgentApp 初始化
 app = AgentApp(
     app_name=Config.APP_NAME,
     app_description=Config.APP_DESCRIPTION,
     lifespan=lifespan,
-    request_model=CustomAgentRequest,
+    request_model=AgentRequest,
 )
 
 app.add_middleware(TraceIDMiddleware)

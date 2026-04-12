@@ -17,5 +17,3 @@ uv.lock
 
 # Local environment secrets
 .env
-.env.*
-!.env.example

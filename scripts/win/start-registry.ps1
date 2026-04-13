@@ -4,5 +4,4 @@ param(
     [switch]$Migrate
 )
 
-$target = Join-Path $PSScriptRoot "win/start-registry.ps1"
-& $target -Port $Port -Migrate:$Migrate
+& (Join-Path $PSScriptRoot "start-metadata-registry.ps1") -Port $Port -Migrate:$Migrate

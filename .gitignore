@@ -24,3 +24,4 @@ uv.lock
 django_registry/db.sqlite3
 django_registry/__pycache__/
 django_registry/**/__pycache__/
+.deepseek/
